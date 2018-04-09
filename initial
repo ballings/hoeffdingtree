@@ -1,0 +1,387 @@
+rm(list=ls())
+
+
+if (!require("datasets")){ install.packages('datasets',
+                      repos="https://cran.rstudio.com/",
+quiet=TRUE) 
+	require("datasets")
+}
+data("Titanic", package = "datasets")
+ttnc <- as.data.frame(Titanic)
+ttnc <- ttnc[rep(1:nrow(ttnc), ttnc$Freq), 1:4] 
+data <- ttnc
+str(data)
+set.seed(1)
+data <- data[sample(1:nrow(data),20*nrow(data),TRUE),] 
+
+X <- data[,1:3]
+Y <- ifelse(data[,4]=='No', 0, 1)
+delta <- 0.6
+
+	
+findsplit <- function(x,y,delta=0.6,i,n_ij0,n_ij1,n_y_1) {
+
+	 # i is x category indicator
+	 # j is x indicator
+	 # k is y class
+	
+    #preallocate count lists
+    if (i==1) {
+    	n_y_1 <- 0 
+      n_ij0 <- n_ij1 <-  vector(mode = "list", length = ncol(x))
+      for (ii in 1:length(n_ij0)) {
+            n_ij0[[ii]] <- n_ij1[[ii]] <- 0L
+      }
+    }
+   
+    #populate count lists
+    for (j in 1:ncol(x)){
+     x1 <- x[,j]
+     if (y==0){
+        if (!as.character(x1) %in% names(n_ij0[[j]])){ #add category
+          if (i != 1)  n_ij0[[j]][length(names(n_ij0[[j]])) + 1] <- 0
+          names(n_ij0[[j]])[length(n_ij0[[j]])] <- as.character(x1)
+        }
+        n_ij0[[j]][as.character(x1)] <- n_ij0[[j]][as.character(x1)] + 1
+     } else if (y==1){
+        if (!as.character(x1) %in% names(n_ij1[[j]])){ #add category
+          if (i != 1)  n_ij1[[j]][length(names(n_ij1[[j]])) + 1] <- 0
+          names(n_ij1[[j]])[length(n_ij1[[j]])] <- as.character(x1)
+        }
+        n_ij1[[j]][as.character(x1)] <- n_ij1[[j]][as.character(x1)] + 1
+     }
+     
+    }
+ 
+     #count number of y=1
+     if (y==1) n_y_1 <- n_y_1 + 1
+
+
+		 #Compute gini
+     # i is the current instance count
+     #p is the variable
+     #n_ij0 is the counts for y=0
+     #n_ij1 is the counts for y=1
+     #comb is all the possible combinations
+  	 G <- function(comb,n_ij0,n_ij1,i,j,n_y_1) {
+			 GiniParent <- GiniChildren <- list()
+			 # decreaseGini <- list()
+  		 for (m in 1:length(comb)){
+  			
+  	   	#count left node
+  	   	a <- n_ij0[[j]][comb[[m]]]
+  	   	b <- n_ij1[[j]][comb[[m]]]
+  	   	a[is.na(a)]  <- 0
+  	   	b[is.na(b)]  <- 0
+  	   	n_l <- sum(c(a, b))
+				#count right node
+  		  n_r <- i-n_l
+  		  #prob of y=1 of parent
+  		  p <- n_y_1/i
+  		  #prob of y=1 of left child
+  		  p_l <- if(n_l==0) 0 else sum(b)/n_l
+  		  #prob of y=1 of left child
+  		  d <- n_ij1[[j]][!names(n_ij1[[j]]) %in% comb[[m]]]
+  	   	d[is.na(d)]  <- 0
+  		  p_r <- if(n_r==0) 0 else sum(d)/n_r
+  		  # decreaseGini[[m]] <- p*(1-p) - (  ((n_l/i)*p_l*(1-p_l))  +   ((n_r/i)*p_r*(1-p_r))    )
+  		  GiniParent[[m]] <-  p*(1-p)
+  		  GiniChildren[[m]] <- (  ((n_l/i)*p_l*(1-p_l))  +   ((n_r/i)*p_r*(1-p_r))    )
+  		  
+  	   }
+  		 # decreaseGini
+			 list(GiniParent=GiniParent, GiniChildren=GiniChildren)
+  	 }
+  		
+  	  # splitpointstore <- giniresultsstore <- list() 
+			BestSplitginiresultsstore <- SecondBestSplitginiresultsstore <- list()  
+			BestSplitPointStore <- SecondBestSplitPointStore <- list() 
+  	  #compute gini for all splits for all j variables 
+			for (j in 1:length(n_ij0)){
+
+  		   
+       ## set up all possible splits in two kid nodes for one variable
+			 lev <- union(names(n_ij0[[j]]),names(n_ij1[[j]]))
+			 	
+       if(length(lev) <= 2) {
+        BestSplitPoint <- comb <-  list(lev[1])
+        SecondBestSplitPoint <- NA
+        giniresults <- G(comb,n_ij0,n_ij1,i,j,n_y_1)
+        BestSplitginiresultsstore[[j]] <- unlist(giniresults$GiniChildren)
+        ordr <- c(1,NA) 
+       } else {
+      
+       comb <- do.call("c", lapply(1:(length(lev) - 2),
+       										function(x) combn(lev, x, simplify = FALSE)))
+       giniresults <-  G(comb,n_ij0,n_ij1,i,j,n_y_1)
+       
+       #extract best and second best split
+			 ordr <- order(unlist(giniresults$GiniChildren))[1:2]
+       BestSplitPoint <- comb[[ordr[1]]]
+       SecondBestSplitPoint <- comb[[ordr[2]]]
+       }
+       
+			 #store the splits
+       BestSplitPointStore[[j]] <- BestSplitPoint
+       SecondBestSplitPointStore[[j]] <- SecondBestSplitPoint
+       #store the corresponding decrease in gini for these splits
+       BestSplitginiresultsstore[[j]] <- unlist(giniresults$GiniChildren)[ordr[1]]
+			 SecondBestSplitginiresultsstore[[j]] <- unlist(giniresults$GiniChildren)[ordr[2]]
+			}
+  	  
+			GiniParent <- giniresults$GiniParent[[1]]
+
+			
+			# R. 		 is the range of gini, which is 1
+			# delta. Hoeffding bound states that with probability 1-delta, the true gini is at least empirical gini minus e 
+			# i. 		 number of instances
+			# eps.	 true gini of a split is at least empirical gini minus e 
+			eps <- function(R,delta,i) sqrt(((R^2)*log(1/delta))/(2*i))
+			e <- eps(1,delta,i)
+			
+			#Extract the best and second best split across variables
+			
+			#BestSplitvariable will contain the best split across variables up to this i
+  	  BestSplitvariable <- which.min(unlist(BestSplitginiresultsstore))
+  	  BestSplitpoint <- unlist(BestSplitPointStore[BestSplitvariable])
+  	  BestSplitgini <- unlist(BestSplitginiresultsstore)[BestSplitvariable]
+  	  	
+  	  #SecondBestSplitvariable will contain the second best split across variables up to this i
+  	  # first set the best split to NA
+  	  BestSplitginiresultsstore[[BestSplitvariable]] <- NA
+  	  # select the second best split (i.e., the new best split)
+  	  bst1 <- which.min(unlist(BestSplitginiresultsstore))
+  	  bstval1 <- unlist(BestSplitginiresultsstore)[bst1]
+  	  bst2 <- which.min(unlist(SecondBestSplitginiresultsstore)) 
+  	  bstval2 <- unlist(SecondBestSplitginiresultsstore)[bst2]
+  	  
+  	  returnObject <- list(i=i, 
+ 														BestSplitvariable=BestSplitvariable,	
+ 														BestSplitpoint=BestSplitpoint,
+		  	  	   							n_ij0=n_ij0, 
+		  	  	   							n_ij1=n_ij1, 
+		  	  	   							n_y_1=n_y_1,
+  	  											splitachieved=0)
+  	  
+  	  if (length(bstval2) > 0){
+  	  
+		  	  SecondBestSplitvariable <-  if (bstval1 < bstval2) bst1 else bst2
+		  	  SecondBestSplitpoint <-  if (bstval1 < bstval2) unlist(BestSplitPointStore[SecondBestSplitvariable]) else unlist(SecondBestSplitPointStore[SecondBestSplitvariable])
+		  	  SecondBestSplitgini <- if (bstval1 < bstval2) bstval1 else bstval2
+		  	  
+		  	  #Test if split can be made
+		  	  if ((SecondBestSplitgini - BestSplitgini) > e & BestSplitgini < GiniParent ) {
+		  	  	
+						returnObject$splitachieved <- 1
+
+		  	  }
+		  	  
+  	  }	
+		 return(returnObject)
+} #end findsplit function
+
+
+# BUILD THE TREE:
+# for (i in 1:nrow(data)){
+# 			if there is a count tree, update count tree using the split tree 
+# 			based on the count tree, test (using the hoeffding bound) if a split can be made (update the split tree) 
+# 		  if the answer from the previous line is yes then:
+# 					update the split tree
+# 					create new count tree with same structure as split tree and set all counts to 0
+# }
+# 
+
+
+split <- splittree <- counttree <- list()
+splittreeExists <- FALSE
+store_i <- 1L
+for (i in 1:nrow(X)){
+	x <- X[i,]	
+	y <- Y[i]
+	
+	if (i==1 ) {
+			n_ij0 <- n_ij1 <- n_y_1 <- 0
+	}
+	
+
+	if (splittreeExists){
+
+
+
+		depth <- function(this,thisdepth=0){
+				  if(!is.list(this)){
+				    return(thisdepth)
+				  }else{
+				    return(max(unlist(lapply(this,depth,thisdepth=thisdepth+1))))
+				  }
+		}
+		linearizeList <- function(l, type) {
+				triggerdepth <- if (type=='counttree') 2 else 1
+				pointer <- 1
+				new_l <- vector(mode='list', length=1)
+				for (a in 1:length(l)){
+
+					if (depth(l[[a]])==triggerdepth) {
+							new_l[[pointer]] <- l[[a]]
+							pointer <- pointer + 1
+					} else { 
+							for (h in 1:2){
+						  	new_l[[pointer]] <- l[[a]][[h]]
+						  	pointer <- pointer + 1
+							}
+						  		  
+					}	
+				}
+				new_l
+		}
+		if (depth(splittree) > 2) splittree <- linearizeList(splittree, type='splittree')
+		if (depth(counttree) > 3) counttree <- linearizeList(counttree, type='counttree')
+
+
+			
+			selectNode <- function(x,v){
+					selector <- 1:2
+					conditions <- logical()
+					for (g in 1:(length(v)/2)){
+						subset <- c(1:length(v))[selector]
+						selector <- selector+2
+						conditions[g] <- as.character(x[,v[[subset[1]]]]) %in% v[[subset[2]]]
+					}
+					all(conditions==TRUE)
+			}
+
+			
+		#FOR LOOP
+			for (j in 1:length(splittree)){
+						 		splitfinder <- function(x,y,i,n_ij0,n_ij1,n_y_1,v) {
+								 				if (selectNode(x,v=v)==TRUE){
+										 					 res <- findsplit(x=x,
+																	   						  y=y,
+																								  delta=0.60,
+																								  i=i, #this needs changing, because not linear anymore
+																								  n_ij0=n_ij0,
+																								  n_ij1=n_ij1,
+																								  n_y_1=n_y_1)
+								 				} else {
+								 					res <- NA
+								 				}
+						 						res
+						 		}
+						 		split[[j]] <- splitfinder(x,y,i=counttree[[j]]$store_i,
+						 															n_ij0=counttree[[j]]$n_ij0,
+						 															n_ij1=counttree[[j]]$n_ij1,
+																		 			n_y_1=counttree[[j]]$n_y_1,
+																		 			v=if(is.list(splittree[[j]])) splittree[[j]] else splittree)
+
+						 		if (length(split[[j]])==7){
+								 		counttree[[j]]$n_y_1 <- split[[j]]$n_y_1 
+								 	  counttree[[j]]$store_i <- split[[j]]$i + 1
+										counttree[[j]]$n_ij0 <- split[[j]]$n_ij0 
+								 	  counttree[[j]]$n_ij1 <- split[[j]]$n_ij1 
+						 		}
+			}
+
+
+			
+	} else {
+	 split  <- list(findsplit(x=x,
+				   						 y=y,
+											 delta=0.60,
+											 i=i,
+											 n_ij0=n_ij0, 
+											 n_ij1=n_ij1, 
+											 n_y_1=n_y_1))
+	 n_ij0 <- split[[1]]$n_ij0
+	 n_ij1 <- split[[1]]$n_ij1
+	 n_y_1 <- split[[1]]$n_y_1
+		
+		}
+
+
+	 
+	 for (ii in 1:length(split)){
+		
+	 	 
+	 	
+	 if ((length(split[[ii]]) != 1) && split[[ii]]$splitachieved==1) {
+
+			 		splittreeExists <- TRUE
+		
+		      
+		
+		      		#for every split object, create two leafs
+				      unn <- 	union(names(split[[ii]]$n_ij0[[split[[ii]]$BestSplitvariable]]),
+				      							names(split[[ii]]$n_ij1[[split[[ii]]$BestSplitvariable]]))
+				      left <- right <- NULL
+				      left <- list(VariableToBeHere=split[[ii]]$BestSplitvariable,
+				      	 					ConditionToBeHere=split[[ii]]$BestSplitpoint)
+				      right <- list(VariableToBeHere=split[[ii]]$BestSplitvariable,
+				      	 						ConditionToBeHere= unn[!unn %in% split[[ii]]$BestSplitpoint])
+
+				      if (length(split)==1) {
+						  	
+						  	splittree <- list(left=left,right=right)
+						  	
+
+						    n_ij0 <- split[[ii]]$n_ij0
+						  	n_ij1 <- split[[ii]]$n_ij1
+						  	for (iii in 1:length(n_ij0)) {
+						            n_ij0[[iii]] <- n_ij1[[iii]] <- 0L
+						    }
+						  	counttree	<- list(list(left=list(n_y_1=1,store_i=1,	n_ij0=n_ij0, n_ij1=n_ij1),
+						  													right=list(n_y_1=0,store_i=1,	n_ij0=n_ij0, n_ij1=n_ij1)))
+
+		      				
+						  } else {	
+						  	splittree[[ii]] <- list(c(splittree[[ii]],left),
+						  											  c(splittree[[ii]],right))
+
+						    n_ij0 <- split[[ii]]$n_ij0
+						  	n_ij1 <- split[[ii]]$n_ij1
+						  	for (iii in 1:length(n_ij0)) {
+						            n_ij0[[iii]] <- n_ij1[[iii]] <- 0L
+						    }
+
+								counttree[[ii]]	<- list(left=list(n_y_1=1,store_i=1,	n_ij0=n_ij0, n_ij1=n_ij1),
+						  	 												right=list(n_y_1=0,store_i=1,	n_ij0=n_ij0, n_ij1=n_ij1))
+						  	
+
+						  }
+		      	
+	 }
+	 } #end ii
+	 print(i)
+}	 
+str(splittree) 
+str(split)
+str(counttree)
+
+
+predictHoeffding <- function(x,splittree,counttree) {
+	# determine first in which of the tree nodes it falls
+	selectNode <- function(x,v){
+					selector <- 1:2
+					conditions <- logical()
+					for (g in 1:(length(v)/2)){
+						subset <- c(1:length(v))[selector]
+						selector <- selector+2
+						conditions[g] <- as.character(x[,v[[subset[1]]]]) %in% v[[subset[2]]]
+					}
+					all(conditions==TRUE)
+	}
+	#then subset the counts to get n_y_1 and store_i
+	node <- which(unlist(lapply(splittree,function(v) selectNode(x,v))))
+	prediction <-  (counttree[[node]]$n_y_1 /	counttree[[node]]$store_i)
+  return(prediction)
+}
+
+predicted <- numeric()
+for (i in 1:nrow(X)){
+	x <- X[i,]	
+	predicted[i] <- predictHoeffding(x,splittree,counttree)
+}
+
+table(predicted)
+
+library(AUC)
+auc(roc(predicted,factor(Y)))
